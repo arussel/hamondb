@@ -1,0 +1,60 @@
+[
+  {
+    "_comment": "seed one category — insert fire on category"
+  },
+  {
+    "op": "insert",
+    "table": "category",
+    "row": {
+      "id": 1,
+      "markup_bps": 1000
+    }
+  },
+  {
+    "_comment": "insert a product under it; computed columns settle before the fire"
+  },
+  {
+    "op": "insert",
+    "table": "product",
+    "row": {
+      "sku": 42,
+      "category_id": 1,
+      "price_cents": 1000,
+      "quantity": 50
+    }
+  },
+  {
+    "_comment": "update a reactive field — price_cents. Cascade: effective_price_cents recomputes."
+  },
+  {
+    "op": "update",
+    "table": "product",
+    "pk": 42,
+    "set": {
+      "price_cents": 2000
+    }
+  },
+  {
+    "_comment": "delete the product; delete fire on product"
+  },
+  {
+    "op": "delete",
+    "table": "product",
+    "pk": 42
+  },
+  {
+    "_comment": "delete the category; delete fire on category"
+  },
+  {
+    "op": "delete",
+    "table": "category",
+    "pk": 1
+  },
+  {
+    "_comment": "block the test thread until every fire has landed before collecting final state. 5 fires total: cat insert, cat delete, prod insert, prod update, prod delete."
+  },
+  {
+    "op": "wait_for_fires",
+    "count": 5
+  }
+]

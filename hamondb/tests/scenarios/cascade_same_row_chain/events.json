@@ -1,0 +1,90 @@
+[
+  {
+    "_comment": "seed one category — fire 1 on category"
+  },
+  {
+    "op": "insert",
+    "table": "category",
+    "row": {
+      "id": 1,
+      "markup_bps": 1000
+    }
+  },
+  {
+    "_comment": "insert product with quantity above threshold. effective_price_cents=110 (10% markup), needs_restock=false, restock_urgency=0. Fire 2."
+  },
+  {
+    "op": "insert",
+    "table": "product",
+    "row": {
+      "sku": 42,
+      "category_id": 1,
+      "price_cents": 100,
+      "quantity": 50
+    }
+  },
+  {
+    "_comment": "quantity 50 -> 8: crosses the <10 threshold. needs_restock flips false->true (link 1), restock_urgency recomputes 0->1 since q>=5 (link 2). One fire."
+  },
+  {
+    "op": "update",
+    "table": "product",
+    "pk": 42,
+    "set": {
+      "quantity": 8
+    }
+  },
+  {
+    "_comment": "quantity 8 -> 3: needs_restock stays true, restock_urgency 1->5 (q<5 branch). Proves link 2 fires even when link 1 result is unchanged, because restock_urgency also declares QUANTITY as a dep."
+  },
+  {
+    "op": "update",
+    "table": "product",
+    "pk": 42,
+    "set": {
+      "quantity": 3
+    }
+  },
+  {
+    "_comment": "quantity 3 -> 0: restock_urgency 5->10 (q==0 branch)."
+  },
+  {
+    "op": "update",
+    "table": "product",
+    "pk": 42,
+    "set": {
+      "quantity": 0
+    }
+  },
+  {
+    "_comment": "quantity 0 -> 100: needs_restock flips true->false, restock_urgency 10->0."
+  },
+  {
+    "op": "update",
+    "table": "product",
+    "pk": 42,
+    "set": {
+      "quantity": 100
+    }
+  },
+  {
+    "_comment": "teardown — fires 7 & 8"
+  },
+  {
+    "op": "delete",
+    "table": "product",
+    "pk": 42
+  },
+  {
+    "op": "delete",
+    "table": "category",
+    "pk": 1
+  },
+  {
+    "_comment": "8 fires total: cat insert, product insert, 4 product updates, product delete, cat delete."
+  },
+  {
+    "op": "wait_for_fires",
+    "count": 8
+  }
+]

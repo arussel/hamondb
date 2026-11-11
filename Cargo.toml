@@ -1,0 +1,7 @@
+[workspace]
+members = ["hamondb", "hamondb-macro"]
+resolver = "2"
+
+[workspace.package]
+license = "MIT"
+repository = "https://github.com/arussel/hamondb"

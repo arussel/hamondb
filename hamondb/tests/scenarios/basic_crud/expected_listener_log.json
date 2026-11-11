@@ -1,0 +1,75 @@
+[
+  {
+    "table": "category",
+    "pk": 1,
+    "transition": "insert",
+    "old": null,
+    "new": {
+      "id": 1,
+      "markup_bps": 1000
+    }
+  },
+  {
+    "table": "category",
+    "pk": 1,
+    "transition": "delete",
+    "old": {
+      "id": 1,
+      "markup_bps": 1000
+    },
+    "new": null
+  },
+  {
+    "table": "product",
+    "pk": 42,
+    "transition": "insert",
+    "old": null,
+    "new": {
+      "sku": 42,
+      "category_id": 1,
+      "price_cents": 1000,
+      "quantity": 50,
+      "effective_price_cents": 1100,
+      "needs_restock": false,
+      "restock_urgency": 0
+    }
+  },
+  {
+    "table": "product",
+    "pk": 42,
+    "transition": "update",
+    "old": {
+      "sku": 42,
+      "category_id": 1,
+      "price_cents": 1000,
+      "quantity": 50,
+      "effective_price_cents": 1100,
+      "needs_restock": false,
+      "restock_urgency": 0
+    },
+    "new": {
+      "sku": 42,
+      "category_id": 1,
+      "price_cents": 2000,
+      "quantity": 50,
+      "effective_price_cents": 2200,
+      "needs_restock": false,
+      "restock_urgency": 0
+    }
+  },
+  {
+    "table": "product",
+    "pk": 42,
+    "transition": "delete",
+    "old": {
+      "sku": 42,
+      "category_id": 1,
+      "price_cents": 2000,
+      "quantity": 50,
+      "effective_price_cents": 2200,
+      "needs_restock": false,
+      "restock_urgency": 0
+    },
+    "new": null
+  }
+]

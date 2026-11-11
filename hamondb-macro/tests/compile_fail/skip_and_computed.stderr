@@ -1,0 +1,7 @@
+error: computed column cannot be skip
+ --> tests/compile_fail/skip_and_computed.rs:7:5
+  |
+7 | /     #[skip]
+8 | |     #[computed]
+9 | |     var: String,
+  | |_______________^

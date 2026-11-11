@@ -1,0 +1,13 @@
+{
+  "tables": {
+    "category": [],
+    "order": [],
+    "product": []
+  },
+  "slots": {
+    "TOTAL_PRODUCT_COUNT": 0
+  },
+  "resources": {
+    "CURRENCY_LABEL": ""
+  }
+}

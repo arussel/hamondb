@@ -1,0 +1,7 @@
+error: primary_key cannot be skip
+ --> tests/compile_fail/skip_and_primary_key.rs:5:5
+  |
+5 | /     #[primary_key]
+6 | |     #[skip]
+7 | |     id: String,
+  | |______________^
