@@ -103,75 +103,94 @@ impl BucketKey {
         }
     }
 }
+/// Dependency graph between cells (data edges) and between cells and index
+/// buckets (bucket-watcher edges).
+///
+/// All methods take `&self`. Internally backed by `DashMap`, so operations are
+/// safely concurrent without an outer lock. The maps are kept pairwise
+/// consistent *eventually*; see module notes on `register` vs `remove` races.
+///
+/// Invariant (steady-state, no in-flight mutations): `D ∈ uses[C] ⇔ C ∈ used_by[D]`.
 #[derive(Default)]
 pub(super) struct DepGraph {
-    pub(super) uses: HashMap<CellId, HashSet<CellId>>,
-    pub(super) used_by: HashMap<CellId, HashSet<CellId>>,
-    pub(super) used_by_index: HashMap<BucketKey, HashSet<CellId>>,
-    pub(super) uses_index: HashMap<CellId, HashSet<BucketKey>>,
+    uses: dashmap::DashMap<CellId, HashSet<CellId>>,
+    used_by: dashmap::DashMap<CellId, HashSet<CellId>>,
+    used_by_index: dashmap::DashMap<BucketKey, HashSet<CellId>>,
+    uses_index: dashmap::DashMap<CellId, HashSet<BucketKey>>,
 }
 
-impl<V: Eq + Hash + Clone> DepGraph {
-    pub(super) fn index_register<T: Table>(
-        &mut self,
-        cell_id: CellId,
-        bucket_keys: HashSet<BucketKey>,
-    ) {
-        // clear stale outgoing edges for `computed`
-        if let Some(old_reads) = self.uses_index.remove(&cell_id) {
-            for old in &old_reads {
-                if let Some(set) = self.used_by_index.get_mut(old) {
-                    set.remove(&cell_id);
-                }
+impl DepGraph {
+    pub(super) fn index_register(&self, cell_id: CellId, bucket_keys: HashSet<BucketKey>) {
+        // Swap in the new forward-edge set for `cell_id`, then diff against the
+        // old set so back-edges on `used_by_index` are only touched where they
+        // changed. Reduces shard-lock contention compared to blind re-insert.
+        let old = self
+            .uses_index
+            .insert(cell_id, bucket_keys.clone())
+            .unwrap_or_default();
+        for stale in old.difference(&bucket_keys) {
+            if let Some(mut set) = self.used_by_index.get_mut(stale) {
+                set.remove(&cell_id);
             }
         }
-        for read in &bucket_keys {
-            self.used_by_index.entry(*read).or_default().insert(cell_id);
+        for fresh in bucket_keys.difference(&old) {
+            self.used_by_index
+                .entry(*fresh)
+                .or_default()
+                .insert(cell_id);
         }
-        self.uses_index.insert(cell_id, bucket_keys);
     }
 
-    pub(super) fn index_clear_cells(&mut self, cell: CellId) {
-        if let Some(buckets) = self.uses_index.remove(&cell) {
+    #[allow(dead_code)]
+    pub(super) fn index_clear_cells(&self, cell: CellId) {
+        if let Some((_, buckets)) = self.uses_index.remove(&cell) {
             for b in &buckets {
-                if let Some(set) = self.used_by_index.get_mut(b) {
-                    set.remove(&cell);
-                    if set.is_empty() {
-                        self.used_by_index.remove(b);
-                    }
+                let drop_entry = self
+                    .used_by_index
+                    .get_mut(b)
+                    .map(|mut s| {
+                        s.remove(&cell);
+                        s.is_empty()
+                    })
+                    .unwrap_or(false);
+                if drop_entry {
+                    // best-effort cleanup; benign if another thread repopulated the bucket
+                    self.used_by_index
+                        .remove_if(b, |_, s| s.is_empty());
                 }
             }
         }
-    }
-    pub(super) fn register(&mut self, computed: CellId, reads: HashSet<CellId>) {
-        // clear stale outgoing edges for `computed`
-        if let Some(old_reads) = self.uses.remove(&computed) {
-            for old in &old_reads {
-                if let Some(set) = self.used_by.get_mut(old) {
-                    set.remove(&computed);
-                }
-            }
-        }
-        for read in &reads {
-            self.used_by.entry(*read).or_default().insert(computed);
-        }
-        self.uses.insert(computed, reads);
     }
 
-    fn remove(&mut self, cell: &CellId) -> HashSet<CellId> {
-        // clear what C reads, they will possibly be reinserted if recompute (not a delete)
-        if let Some(reads) = self.uses.remove(cell) {
+    pub(super) fn register(&self, computed: CellId, reads: HashSet<CellId>) {
+        let old = self.uses.insert(computed, reads.clone()).unwrap_or_default();
+        for stale in old.difference(&reads) {
+            if let Some(mut set) = self.used_by.get_mut(stale) {
+                set.remove(&computed);
+            }
+        }
+        for fresh in reads.difference(&old) {
+            self.used_by.entry(*fresh).or_default().insert(computed);
+        }
+    }
+
+    /// Remove `cell` from both directions. Returns its dependents (cells that
+    /// read `cell`) so the caller can enqueue them for recomputation.
+    ///
+    /// Not atomic across the two maps. A concurrent `register(D, {cell})` may
+    /// observe this half-removed state; the leftover edge gets cleaned on
+    /// D's next `register` call via the forward-edge diff.
+    pub(super) fn remove(&self, cell: &CellId) -> HashSet<CellId> {
+        if let Some((_, reads)) = self.uses.remove(cell) {
             for read in &reads {
-                if let Some(set) = self.used_by.get_mut(read) {
+                if let Some(mut set) = self.used_by.get_mut(read) {
                     set.remove(cell);
                 }
             }
         }
-
-        // clear who reads C, return for recomputation
-        if let Some(dependents) = self.used_by.remove(cell) {
+        if let Some((_, dependents)) = self.used_by.remove(cell) {
             for dep in &dependents {
-                if let Some(set) = self.uses.get_mut(dep) {
+                if let Some(mut set) = self.uses.get_mut(dep) {
                     set.remove(cell);
                 }
             }
@@ -181,8 +200,23 @@ impl<V: Eq + Hash + Clone> DepGraph {
         }
     }
 
-    pub(super) fn dependents(&self, cell: &CellId) -> Option<&HashSet<CellId>> {
-        self.used_by.get(cell)
+    pub(super) fn dependents(&self, cell: &CellId) -> HashSet<CellId> {
+        self.used_by
+            .get(cell)
+            .map(|r| r.clone())
+            .unwrap_or_default()
+    }
+
+    pub(super) fn watchers_of_bucket(&self, key: &BucketKey) -> HashSet<CellId> {
+        self.used_by_index
+            .get(key)
+            .map(|r| r.clone())
+            .unwrap_or_default()
+    }
+
+    #[cfg(test)]
+    pub(super) fn uses_of(&self, cell: &CellId) -> Option<HashSet<CellId>> {
+        self.uses.get(cell).map(|r| r.clone())
     }
 }
 
@@ -193,7 +227,7 @@ pub enum InsertOutcome<T: Table + Send + Sync> {
 
 pub struct TableRegistry {
     pub(super) tables: HashMap<TypeId, Box<dyn AnyTableStore>>,
-    pub(super) deps: RwLock<DepGraph>,
+    pub(super) deps: DepGraph,
     pub(super) join_handles: Mutex<Vec<std::thread::JoinHandle<()>>>,
     pub(super) shutdown_token: ShutdownToken,
     pub(super) resources: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
@@ -306,20 +340,28 @@ impl HamonInner {
     fn insert_impl<T: Table + 'static>(&self, row: T) -> InsertOutcome<T> {
         let row_id = self.next_row_id.fetch_add(1, Ordering::Relaxed);
         let table = self.table::<T>();
-        let ctx = Ctx::new(&self.register.tables, &self.register.resources);
+        let ctx = Ctx::new(
+            &self.register.tables,
+            &self.register.resources,
+            &self.register.hasher,
+        );
         let mut new = row.clone();
         let (deps, bucket_deps) = table.compute_columns(&mut new, &ctx, row_id, None);
-        match table.insert(new, row_id) {
-            InsertResult::Inserted(guard) => {
-                let mut dep_graph = self.register.deps.write();
+        match table.insert(new, row_id, &self.register.hasher) {
+            InsertResult::Inserted(guard, bucket_keys) => {
+                let dep_graph = &self.register.deps;
                 for (computed_cell, read_cells) in deps {
                     dep_graph.register(computed_cell, read_cells)
                 }
                 for (computed_cell, read_bucket) in bucket_deps {
-                    dep_graph.index_register()
+                    dep_graph.index_register(computed_cell, read_bucket)
+                }
+                for key in &bucket_keys {
+                    for cell in dep_graph.watchers_of_bucket(key) {
+                        let _ = self.queue.enqueue(cell);
+                    }
                 }
                 let new_copy = guard.clone();
-                drop(dep_graph);
                 drop(guard);
                 table.fire_lister(&None, &Some(new_copy));
                 InsertOutcome::Inserted
@@ -393,24 +435,34 @@ impl HamonInner {
             if changed_regular_cells.is_empty() {
                 return Ok(());
             }
-            let mut dep_graph: RwLockWriteGuard<RawRwLock, DepGraph> = self.register.deps.write();
+            // Partition dependents into same-row (feed back into this fixpoint)
+            // vs cross-row (enqueue after replace).
             let dependent_cells: HashSet<CellId> = changed_regular_cells
                 .iter()
-                .flat_map(|cell| dep_graph.dependents(cell).into_iter().flatten())
-                .cloned()
+                .flat_map(|cell| self.register.deps.dependents(cell))
                 .collect();
-            let (mut same_row, mut other_rows): (HashSet<CellId>, HashSet<CellId>) =
-                dependent_cells
-                    .iter()
-                    .partition(|cell| cell.table == TypeId::of::<T>() && cell.row == row_id);
-
-            let initial = same_row.iter().map(|c| c.column).collect::<HashSet<_>>();
-            let ctx = Ctx::new(&self.register.tables, &self.register.resources);
+            let (same_row, mut other_rows): (HashSet<CellId>, HashSet<CellId>) = dependent_cells
+                .iter()
+                .partition(|cell| cell.table == TypeId::of::<T>() && cell.row == row_id);
+            let initial: HashSet<ColumnId> = same_row.iter().map(|c| c.column).collect();
+            let ctx = Ctx::new(
+                &self.register.tables,
+                &self.register.resources,
+                &self.register.hasher,
+            );
             let cross_row_additions =
-                table.fixpoint_compute(row_id, initial, &mut row, &*guard, &ctx, &mut *dep_graph);
+                table.fixpoint_compute(row_id, initial, &mut row, &*guard, &ctx, &self.register.deps);
             other_rows.extend(cross_row_additions);
-            let ReplaceOutcome{old_row, new_row, bucket_moves} = table.replace(guard, row, &self.register.hasher);
-            drop(dep_graph);
+            let ReplaceOutcome { old_row, new_row, bucket_moves } =
+                table.replace(guard, row, &self.register.hasher);
+            for mv in &bucket_moves {
+                for cell in self.register.deps.watchers_of_bucket(&mv.from) {
+                    let _ = self.queue.enqueue(cell);
+                }
+                for cell in self.register.deps.watchers_of_bucket(&mv.to) {
+                    let _ = self.queue.enqueue(cell);
+                }
+            }
             for cell in other_rows.iter() {
                 let _ = self.queue.enqueue(*cell);
             }
@@ -509,7 +561,11 @@ impl HamonInner {
         value: &V,
     ) -> Vec<T> {
         let table = self.table::<T>();
-        table.lookup_index(index, value)
+        table
+            .lookup_index(&index, value)
+            .into_iter()
+            .map(|(arc, _row_id)| arc.read().clone())
+            .collect()
     }
 
     pub fn len<T: Table + 'static>(&self) -> usize {
@@ -534,21 +590,17 @@ impl HamonInner {
                     let guard = arc.write();
                     let row = guard.clone();
                     let (_, bucket_keys) = table.delete(guard, &self.register.hasher);
-                    let mut dep_graph = self.register.deps.write();
+                    let dep_graph = &self.register.deps;
                     for key in &bucket_keys {
-                        if let Some(cells) = dep_graph.used_by_index.get(key) {
-                            for cell in cells {
-                                let _ = self.queue.enqueue(*cell);
-                            }
-                        }
-                    }
-                    for cell in table.cell_ids_for_row(row_id) {
-                        let to_recompute = dep_graph.remove(&cell);
-                        for cell in to_recompute {
+                        for cell in dep_graph.watchers_of_bucket(key) {
                             let _ = self.queue.enqueue(cell);
                         }
                     }
-                    drop(dep_graph);
+                    for cell in table.cell_ids_for_row(row_id) {
+                        for to_recompute in dep_graph.remove(&cell) {
+                            let _ = self.queue.enqueue(to_recompute);
+                        }
+                    }
                     table.fire_lister(&Some(row), &None);
                     Ok(())
                 }
@@ -582,7 +634,7 @@ pub struct Ctx<'a> {
     pub(super) tracker: RefCell<HashSet<CellId>>,
     pub(super) bucket_tracker: RefCell<HashSet<BucketKey>>,
     held_locks: RefCell<Vec<Box<dyn Any>>>,
-    hasher: &'a RandomState,
+    pub(super) hasher: &'a RandomState,
 }
 
 impl<'a> Ctx<'a> {
@@ -590,7 +642,10 @@ impl<'a> Ctx<'a> {
         let table = self.get_table::<T>();
         let arc = table.get_row_from_pk(key)?;
         let guard_for_row = arc.read_arc(); // first read lock — goes into Row
-        let guard_for_hold = arc.read_arc(); // second read lock — goes into held_locks
+        // Second read lock from the same thread: must be recursive so a writer
+        // queued between the two acquisitions does not deadlock us under
+        // parking_lot's writer-biased fairness.
+        let guard_for_hold = arc.read_arc_recursive();
         self.held_locks.borrow_mut().push(Box::new(guard_for_hold));
         table
             .pk_to_row_id
@@ -621,7 +676,8 @@ impl<'a> Ctx<'a> {
             .iter()
             .map(|(guard, row_id)| {
                 let guard_for_row = guard.read_arc();
-                let guard_for_hold = guard.read_arc();
+                // Recursive to avoid the same self-deadlock documented in `lookup`.
+                let guard_for_hold = guard.read_arc_recursive();
                 self.held_locks.borrow_mut().push(Box::new(guard_for_hold));
                 Row::new_for_lookup(RowInner::Guard(guard_for_row), self, *row_id)
             })
@@ -669,12 +725,15 @@ impl<'a> Ctx<'a> {
     pub(super) fn new(
         tables: &'a HashMap<TypeId, Box<dyn AnyTableStore>>,
         resources: &'a HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+        hasher: &'a RandomState,
     ) -> Self {
         Ctx {
             tables,
             tracker: RefCell::new(HashSet::new()),
+            bucket_tracker: RefCell::new(HashSet::new()),
             held_locks: RefCell::new(Vec::new()),
             resources,
+            hasher,
         }
     }
 }
@@ -789,5 +848,236 @@ mod test {
             val: "foo".to_string(),
         });
         assert!(result.is_ok());
+    }
+}
+
+// Concurrency stress tests for DepGraph.
+//
+// These exercise the lock-free (DashMap-backed) implementation under
+// contention — scenarios the single-RwLock version could never trigger.
+// The goal is to confirm:
+//   1. No corruption (panics / bad unwraps / lost dependents).
+//   2. Self-healing: transient dangling back-edges from register/remove races
+//      get cleaned on the next `register` call via forward-edge diffing.
+//   3. Convergence of `dependents()` under concurrent writers to a hot cell.
+#[cfg(test)]
+mod dep_graph_stress {
+    use super::{BucketKey, DepGraph};
+    use crate::column::{CellId, ColumnId};
+    use std::any::TypeId;
+    use std::collections::HashSet;
+    use std::sync::Arc;
+    use std::thread;
+
+    struct Marker;
+    fn cell(row: u64, col: ColumnId) -> CellId {
+        CellId {
+            table: TypeId::of::<Marker>(),
+            row,
+            column: col,
+        }
+    }
+    fn bucket(idx: usize, b: u64) -> BucketKey {
+        BucketKey {
+            table: TypeId::of::<Marker>(),
+            index: idx,
+            bucket: b,
+        }
+    }
+
+    #[test]
+    fn many_cells_register_same_hot_read() {
+        // N cells all register as dependents of one hot cell X.
+        // After join, `dependents(X)` must contain exactly all N cells.
+        // Exercises the DashMap entry-lock serialization on `used_by[X]`.
+        const N: u32 = 500;
+        let graph = Arc::new(DepGraph::default());
+        let x = cell(0, 0);
+        let handles: Vec<_> = (0..N)
+            .map(|i| {
+                let g = graph.clone();
+                thread::spawn(move || {
+                    let c = cell(1, (i + 1) as ColumnId);
+                    g.register(c, HashSet::from([x]));
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let deps = graph.dependents(&x);
+        assert_eq!(deps.len(), N as usize);
+        for i in 0..N {
+            assert!(deps.contains(&cell(1, (i + 1) as ColumnId)));
+        }
+    }
+
+    #[test]
+    fn concurrent_register_updates_same_cell_converge() {
+        // One cell C re-registers its reads from many threads using the same
+        // target set; the final state is well-defined even if intermediate
+        // interleavings are racy. All threads converge on `uses[C] = {X}`.
+        const N: u32 = 300;
+        let graph = Arc::new(DepGraph::default());
+        let c = cell(5, 100);
+        let x = cell(0, 0);
+        let handles: Vec<_> = (0..N)
+            .map(|_| {
+                let g = graph.clone();
+                thread::spawn(move || {
+                    g.register(c, HashSet::from([x]));
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(graph.uses_of(&c), Some(HashSet::from([x])));
+        assert!(graph.dependents(&x).contains(&c));
+    }
+
+    #[test]
+    fn register_vs_remove_self_heals_on_next_register() {
+        // Simulates the critical race: cell D is registered to read X,
+        // then X is removed by a concurrent delete. The forward edge
+        // `uses[D]={X}` may linger. A later re-register of D with a fresh
+        // reads set must clean the stale `used_by[X]` entry via the
+        // forward-edge diff.
+        let graph = DepGraph::default();
+        let d = cell(1, 10);
+        let x = cell(0, 0);
+        let y = cell(0, 1);
+        graph.register(d, HashSet::from([x]));
+        // X is removed (e.g. its row was deleted)
+        let dependents_of_x = graph.remove(&x);
+        assert!(dependents_of_x.contains(&d));
+        // Now D re-registers with {Y} — this should drop the stale x edge
+        graph.register(d, HashSet::from([y]));
+        assert_eq!(graph.uses_of(&d), Some(HashSet::from([y])));
+        assert!(!graph.dependents(&x).contains(&d), "stale back-edge not cleaned");
+        assert!(graph.dependents(&y).contains(&d));
+    }
+
+    #[test]
+    fn concurrent_register_and_remove_no_panic() {
+        // Hammer two threads doing register(D, {X}) and remove(X) in a tight
+        // loop. If the maps got out of sync in a way that panics (e.g. a bad
+        // unwrap), this would catch it. We don't assert on final state because
+        // the race is the whole point — only correctness of each operation.
+        const ITERS: u32 = 2_000;
+        let graph = Arc::new(DepGraph::default());
+        let x = cell(0, 0);
+        let g1 = graph.clone();
+        let t1 = thread::spawn(move || {
+            for i in 0..ITERS {
+                let d = cell(1, (i % 50) as ColumnId);
+                g1.register(d, HashSet::from([x]));
+            }
+        });
+        let g2 = graph.clone();
+        let t2 = thread::spawn(move || {
+            for _ in 0..ITERS {
+                let _ = g2.remove(&x);
+            }
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+        // Regardless of interleaving, `dependents(X)` must be a valid HashSet
+        // (no panic) and `uses_of(D)` for each D is either {X} or absent.
+        for i in 0..50u32 {
+            let d = cell(1, i as ColumnId);
+            if let Some(u) = graph.uses_of(&d) {
+                assert!(u.is_subset(&HashSet::from([x])));
+            }
+        }
+    }
+
+    #[test]
+    fn index_register_concurrent_hot_bucket() {
+        // N cells all watch one hot bucket key — end state has all watchers
+        // present. Mirrors the "1000 positions watching PRICE(SOL)" fanout.
+        const N: u32 = 400;
+        let graph = Arc::new(DepGraph::default());
+        let hot = bucket(0, 42);
+        let handles: Vec<_> = (0..N)
+            .map(|i| {
+                let g = graph.clone();
+                thread::spawn(move || {
+                    let c = cell((i + 1) as u64, 0);
+                    g.index_register(c, HashSet::from([hot]));
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let watchers = graph.watchers_of_bucket(&hot);
+        assert_eq!(watchers.len(), N as usize);
+    }
+
+    #[test]
+    fn index_register_replacement_drops_old_edges() {
+        // index_register with a new set must sever stale back-edges on the
+        // previous bucket keys (forward-edge diffing).
+        let graph = DepGraph::default();
+        let c = cell(1, 0);
+        let b_old = bucket(0, 1);
+        let b_new = bucket(0, 2);
+        graph.index_register(c, HashSet::from([b_old]));
+        graph.index_register(c, HashSet::from([b_new]));
+        assert!(!graph.watchers_of_bucket(&b_old).contains(&c));
+        assert!(graph.watchers_of_bucket(&b_new).contains(&c));
+    }
+
+    #[test]
+    fn mixed_register_remove_hammer() {
+        // Three thread classes:
+        //   - registers cells that depend on a shared pool of read targets
+        //   - removes random read targets
+        //   - reads `dependents` (the query path used by replace/delete)
+        // Goal: no panics, no deadlocks. Timeout is the test timeout.
+        const READS: u32 = 20;
+        const ITERS: u32 = 1_000;
+        let graph = Arc::new(DepGraph::default());
+        let targets: Vec<CellId> = (0..READS).map(|i| cell(0, i as ColumnId)).collect();
+
+        let g1 = graph.clone();
+        let t1_targets = targets.clone();
+        let t1 = thread::spawn(move || {
+            for i in 0..ITERS {
+                let d = cell(1, (i % 100) as ColumnId);
+                let read_count = (i as usize % 4) + 1;
+                let reads: HashSet<CellId> = t1_targets
+                    .iter()
+                    .cycle()
+                    .skip(i as usize % READS as usize)
+                    .take(read_count)
+                    .copied()
+                    .collect();
+                g1.register(d, reads);
+            }
+        });
+
+        let g2 = graph.clone();
+        let t2_targets = targets.clone();
+        let t2 = thread::spawn(move || {
+            for i in 0..ITERS {
+                let t = t2_targets[(i as usize) % t2_targets.len()];
+                let _ = g2.remove(&t);
+            }
+        });
+
+        let g3 = graph.clone();
+        let t3_targets = targets.clone();
+        let t3 = thread::spawn(move || {
+            for i in 0..ITERS {
+                let t = t3_targets[(i as usize) % t3_targets.len()];
+                let _ = g3.dependents(&t);
+            }
+        });
+
+        t1.join().unwrap();
+        t2.join().unwrap();
+        t3.join().unwrap();
     }
 }

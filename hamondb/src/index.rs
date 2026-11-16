@@ -35,7 +35,7 @@ where
 {
     fn on_insert(&mut self, key: &T::PrimaryKey, new: &T, hasher: &RandomState) -> BucketKey {
         let value = (self.extract)(new);
-        let bucket_key = BucketKey::new(&self.handle, &value, hasher)
+        let bucket_key = BucketKey::new(&self.handle, &value, hasher);
         self.map.entry(value).or_default().push(key.clone());
         bucket_key
     }

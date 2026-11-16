@@ -16,7 +16,7 @@ use parking_lot::{Mutex, RwLock};
 use std::any::{type_name, Any, TypeId};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
-use std::hash::Hash;
+use std::hash::{Hash, RandomState};
 use std::marker::PhantomData;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Weak};
@@ -183,6 +183,7 @@ pub struct HamonBuilder {
     tables: HashMap<TypeId, Box<dyn AnyTableStore>>,
     feeders: HashMap<String, Box<dyn Fn(&Hamon, &ShutdownToken) + Send + 'static>>,
     resources: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    hasher: RandomState,
 }
 
 impl HamonBuilder {
@@ -191,6 +192,7 @@ impl HamonBuilder {
             tables: HashMap::new(),
             feeders: HashMap::new(),
             resources: HashMap::new(),
+            hasher: RandomState::new(),
         }
     }
 
@@ -253,9 +255,10 @@ impl HamonBuilder {
                 _marker: PhantomData,
             },
             0,
+            &self.hasher,
         );
         assert!(
-            matches!(result, InsertResult::Inserted(_)),
+            matches!(result, InsertResult::Inserted(..)),
             "slot store was not empty at registration",
         );
         match self.tables.entry(TypeId::of::<SlotRow<M, V>>()) {
@@ -305,21 +308,25 @@ impl HamonBuilder {
     pub fn build(self) -> (Hamon, HamonShutdown) {
         // let hamon = HamonInner::new(self.tables, self.feeders);
         let shutdown = ShutdownToken::new();
-        let deps = RwLock::new(DepGraph::default());
         let join_handles = Mutex::new(vec![]);
         let inner = Arc::new(TableRegistry {
             tables: self.tables,
-            deps,
+            deps: DepGraph::default(),
             join_handles,
             shutdown_token: shutdown.clone(),
             resources: self.resources,
+            hasher: self.hasher,
         });
         let inner_clone = inner.clone();
         let queue = Arc::new_cyclic(|weak_queue: &Weak<RecomputeQueue>| {
             let weak = weak_queue.clone();
             let callback = Box::new(move |table, row_id, columns| {
                 let table = inner_clone.tables.get(&table).unwrap();
-                let ctx = Ctx::new(&inner_clone.tables, &inner_clone.resources);
+                let ctx = Ctx::new(
+                    &inner_clone.tables,
+                    &inner_clone.resources,
+                    &inner_clone.hasher,
+                );
                 let cross_row_dependents =
                     { table.recompute_row(row_id, columns, &ctx, &inner_clone.deps) };
                 if let Some(queue) = weak.upgrade() {

@@ -89,7 +89,7 @@ pub(super) trait AnyTableStore: Send + Sync + Any {
         row_id: u64,
         columns: HashSet<ColumnId>,
         ctx: &Ctx,
-        rwlock_dep_graph: &RwLock<DepGraph>,
+        dep_graph: &DepGraph,
     ) -> HashSet<CellId>;
 
     fn as_any(&self) -> &dyn Any;
@@ -134,7 +134,7 @@ impl<T: Table> AnyTableStore for TableStore<T> {
         row_id: u64,
         columns: HashSet<ColumnId>,
         ctx: &Ctx,
-        dep_graph: &RwLock<DepGraph>,
+        dep_graph: &DepGraph,
     ) -> HashSet<CellId> {
         let Some(pk) = self.row_id_to_pk.get(&row_id).map(|p| p.clone()) else {
             return HashSet::default();
@@ -144,12 +144,10 @@ impl<T: Table> AnyTableStore for TableStore<T> {
         };
         let guard = arc.write();
         let mut new = guard.clone();
-        let mut dep_graph = dep_graph.write();
         let cross_row =
-            self.fixpoint_compute(row_id, columns, &mut new, &guard, ctx, &mut *dep_graph);
-        drop(dep_graph);
-        let (old, new) = self.replace(guard, new);
-        self.fire_lister(&Some(old), &Some(new));
+            self.fixpoint_compute(row_id, columns, &mut new, &guard, ctx, dep_graph);
+        let ReplaceOutcome { old_row, new_row, .. } = self.replace(guard, new, ctx.hasher);
+        self.fire_lister(&Some(old_row), &Some(new_row));
         cross_row
     }
 
@@ -197,7 +195,7 @@ impl<T: Table> TableStore<T> {
         row: &mut T,
         old_row: &T,
         ctx: &Ctx,
-        dep_graph: &mut DepGraph,
+        dep_graph: &DepGraph,
     ) -> HashSet<CellId> {
         Self::fixpoint_compute_inner(
             &self.computed_columns,
@@ -219,7 +217,7 @@ impl<T: Table> TableStore<T> {
         row: &mut T,
         old_row: &T,
         ctx: &Ctx,
-        dep_graph: &mut DepGraph,
+        dep_graph: &DepGraph,
     ) -> HashSet<CellId> {
         let mut cross_row: HashSet<CellId> = HashSet::new();
         let mut to_recompute = initial_columns;
@@ -229,7 +227,7 @@ impl<T: Table> TableStore<T> {
             if to_recompute.is_empty() {
                 break;
             }
-            let deps = Self::compute_columns_inner(
+            let (deps, bucket_deps) = Self::compute_columns_inner(
                 computed_columns,
                 computed_column_ids,
                 row,
@@ -237,9 +235,6 @@ impl<T: Table> TableStore<T> {
                 row_id,
                 Some(&to_recompute),
             );
-            for (c, reads) in deps {
-                dep_graph.register(c, reads);
-            }
             let changed = Self::reconcile_computed(
                 computed_columns,
                 row_id,
@@ -248,10 +243,15 @@ impl<T: Table> TableStore<T> {
                 &to_recompute,
             );
             reconcile_against = row.clone();
+            for (c, reads) in deps {
+                dep_graph.register(c, reads);
+            }
+            for (c, keys) in bucket_deps {
+                dep_graph.index_register(c, keys);
+            }
             let next_dependents: HashSet<CellId> = changed
                 .iter()
-                .flat_map(|c| dep_graph.dependents(c).into_iter().flatten())
-                .cloned()
+                .flat_map(|c| dep_graph.dependents(c))
                 .collect();
             let (same_row, other_rows): (HashSet<CellId>, HashSet<CellId>) = next_dependents
                 .iter()
@@ -570,10 +570,11 @@ mod test {
         let mut row = T {};
         let tables: HashMap<TypeId, Box<dyn AnyTableStore>> = HashMap::new();
         let resources: HashMap<TypeId, Box<dyn Any + Send + Sync>> = HashMap::new();
-        let ctx = Ctx::new(&tables, &resources);
-        let result =
+        let hasher = RandomState::new();
+        let ctx = Ctx::new(&tables, &resources, &hasher);
+        let (deps, _bucket_deps) =
             TableStore::compute_columns_inner(&vec![], &HashSet::new(), &mut row, &ctx, 0, None);
-        assert_eq!(result.len(), 0);
+        assert_eq!(deps.len(), 0);
     }
 
     #[test]
@@ -581,13 +582,14 @@ mod test {
         let mut row = T {};
         let tables: HashMap<TypeId, Box<dyn AnyTableStore>> = HashMap::new();
         let resources: HashMap<TypeId, Box<dyn Any + Send + Sync>> = HashMap::new();
-        let ctx = Ctx::new(&tables, &resources);
+        let hasher = RandomState::new();
+        let ctx = Ctx::new(&tables, &resources, &hasher);
         let cc1 = make_cc::<T>(0, &vec![]);
-        let result =
+        let (deps, _bucket_deps) =
             TableStore::compute_columns_inner(&vec![cc1], &HashSet::new(), &mut row, &ctx, 0, None);
-        assert_eq!(result.len(), 1);
-        let deps = &result.first().unwrap().1;
-        assert!(deps.is_empty());
+        assert_eq!(deps.len(), 1);
+        let reads = &deps.first().unwrap().1;
+        assert!(reads.is_empty());
     }
 
     #[test]
@@ -595,11 +597,12 @@ mod test {
         let mut row = T {};
         let tables: HashMap<TypeId, Box<dyn AnyTableStore>> = HashMap::new();
         let resources: HashMap<TypeId, Box<dyn Any + Send + Sync>> = HashMap::new();
-        let ctx = Ctx::new(&tables, &resources);
+        let hasher = RandomState::new();
+        let ctx = Ctx::new(&tables, &resources, &hasher);
         let cc1 = make_cc_with_used_dependencies::<T>(4, &vec![1, 2]);
         let cc2 = make_cc_with_used_dependencies::<T>(5, &vec![2, 4]);
         let cc3 = make_cc_with_used_dependencies::<T>(6, &vec![1, 2, 5]);
-        let result = TableStore::compute_columns_inner(
+        let (deps, _bucket_deps) = TableStore::compute_columns_inner(
             &vec![cc1, cc2, cc3],
             &HashSet::new(),
             &mut row,
@@ -607,7 +610,7 @@ mod test {
             0,
             None,
         );
-        assert_eq!(result.len(), 3);
+        assert_eq!(deps.len(), 3);
         let cell = |col: ColumnId| CellId {
             table: TypeId::of::<T>(),
             row: 0,
@@ -618,7 +621,7 @@ mod test {
             (cell(5), HashSet::from([cell(2), cell(4)])),
             (cell(6), HashSet::from([cell(1), cell(2), cell(5)])),
         ];
-        assert_eq!(result, expected);
+        assert_eq!(deps, expected);
     }
 
     #[test]
@@ -627,8 +630,9 @@ mod test {
         let mut updated = original.clone();
         let tables: HashMap<TypeId, Box<dyn AnyTableStore>> = HashMap::new();
         let resources: HashMap<TypeId, Box<dyn Any + Send + Sync>> = HashMap::new();
-        let ctx = Ctx::new(&tables, &resources);
-        let mut dep_graph = DepGraph::default();
+        let hasher = RandomState::new();
+        let ctx = Ctx::new(&tables, &resources, &hasher);
+        let dep_graph = DepGraph::default();
         let result = TableStore::fixpoint_compute_inner(
             &Vec::new(),
             &HashSet::new(),
@@ -637,12 +641,12 @@ mod test {
             &mut updated,
             &original,
             &ctx,
-            &mut dep_graph,
+            &dep_graph,
         );
         assert_eq!(result.len(), 0);
     }
 
-    fn register_rows<T: Table>(dep_graph: &mut DepGraph, values: Vec<(ColumnId, Vec<ColumnId>)>) {
+    fn register_rows<T: Table>(dep_graph: &DepGraph, values: Vec<(ColumnId, Vec<ColumnId>)>) {
         for (c_id, ids) in values {
             dep_graph.register(
                 CellId {
@@ -688,13 +692,14 @@ mod test {
             restock_urgency: 0,   // stale
         };
         let initial_columns = HashSet::from([5u16 as ColumnId]); // needs_restock — dependent of QUANTITY
-        let mut dep_graph = DepGraph::default();
+        let dep_graph = DepGraph::default();
 
         let tables: HashMap<TypeId, Box<dyn AnyTableStore>> = HashMap::new();
         let resources: HashMap<TypeId, Box<dyn Any + Send + Sync>> = HashMap::new();
-        let ctx = Ctx::new(&tables, &resources);
+        let hasher = RandomState::new();
+        let ctx = Ctx::new(&tables, &resources, &hasher);
         register_rows::<Product>(
-            &mut dep_graph,
+            &dep_graph,
             vec![
                 (4, vec![1, 2]), // effective_price_cents reads category_id + price_cents
                 (5, vec![3]),    // needs_restock reads quantity
@@ -702,7 +707,7 @@ mod test {
             ],
         );
         let ccs = Product::extract_computed_columns();
-        let computed_ids: HashSet<ColumnId> = ccs.iter().map(|c| c.id()).collect();
+        let _computed_ids: HashSet<ColumnId> = ccs.iter().map(|c| c.id()).collect();
         let result = TableStore::<Product>::fixpoint_compute_inner(
             &ccs,
             &ccs.iter().map(|cc| cc.id()).collect(),
@@ -711,7 +716,7 @@ mod test {
             &mut new,
             &original,
             &ctx,
-            &mut dep_graph,
+            &dep_graph,
         );
 
         assert!(
@@ -722,7 +727,7 @@ mod test {
         assert_eq!(new.quantity, 8); // untouched by compute
         assert_eq!(new.needs_restock, true); // recomputed: 8 < 10
         assert_eq!(new.restock_urgency, 1); // recomputed: nr=true, q=8 → branch "else { 1 }"
-        assert_eq!(new.effective_price_cents, 100); // not recomputed; no dep changed // --- 3. dep graph: restock_urgency's deps should have expanded ---
+        assert_eq!(new.effective_price_cents, 100); // not recomputed; no dep changed
         let cell = |col: ColumnId| CellId {
             table: TypeId::of::<Product>(),
             row: 0,
@@ -730,21 +735,21 @@ mod test {
         };
 
         assert_eq!(
-            dep_graph.uses.get(&cell(5)),
-            Some(&HashSet::from([cell(3)])),
+            dep_graph.uses_of(&cell(5)),
+            Some(HashSet::from([cell(3)])),
             "needs_restock (5) still uses only quantity (3)"
         );
 
         assert_eq!(
-            dep_graph.uses.get(&cell(6)),
-            Some(&HashSet::from([cell(3), cell(5)])),
+            dep_graph.uses_of(&cell(6)),
+            Some(HashSet::from([cell(3), cell(5)])),
             "restock_urgency (6) must now track BOTH needs_restock (5) and quantity (3) — \
        the branch that reads quantity actually ran this time"
         );
 
         assert_eq!(
-            dep_graph.uses.get(&cell(4)),
-            Some(&HashSet::from([cell(1), cell(2)])),
+            dep_graph.uses_of(&cell(4)),
+            Some(HashSet::from([cell(1), cell(2)])),
             "effective_price_cents (4) unchanged — not recomputed, deps preserved"
         );
     }
