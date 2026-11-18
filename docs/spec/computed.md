@@ -50,7 +50,7 @@ processed, the worker evaluates them together under a single write lock.
 ### HMN-COMP-009 — Worker pool size
 The recompute pool is created with 4 workers in `builder::build()`.
 
-> OPEN(HMN-COMP-009): Is the worker count (`4` at `hamondb/src/builder.rs:338`)
+> OPEN(HMN-COMP-009, #6): Is the worker count (`4` at `hamondb/src/builder.rs:338`)
 > a part of the public contract, or an implementation detail? Not configurable
 > via builder API today.
 
@@ -91,7 +91,7 @@ topological sort (HMN-COMP-004) correct.
 registered as a dependency. A computed column that reads a resource will
 not automatically re-fire when `set_resource` is called.
 
-> OPEN(HMN-COMP-016): This is observable behaviour, but is it an intended
+> OPEN(HMN-COMP-016, #1): This is observable behaviour, but is it an intended
 > design decision (resources are "pre-aggregate state, shouldn't flow
 > through the dep graph") or an omission? Code:
 > `hamondb/src/hamon_core.rs:686-699`. No test covers "resource write

@@ -43,7 +43,7 @@ The public API panics (not errors) when a table is not registered. The
 `TableNotRegistered` variant exists on the enum but is not returned by
 any public method as of this spec version.
 
-> OPEN(HMN-ERR-009): `TableNotRegistered` and `ComputedColumnDependencyError`
+> OPEN(HMN-ERR-009, #9): `TableNotRegistered` and `ComputedColumnDependencyError`
 > are declared on `HamonError` but not returned by any public code path
 > I surveyed. Should they be removed, or repurposed?
 
