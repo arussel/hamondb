@@ -29,7 +29,7 @@ on another row), the listener registered for its table fires with
 `(pk, Some(&old), Some(&new))` on the worker thread, after the per-row
 write lock is released.
 
-> OPEN(HMN-REACT-005): The async recompute path calls `fire_lister`
+> OPEN(HMN-REACT-005, #7): The async recompute path calls `fire_lister`
 > unconditionally in `store.rs:150`, even when `fixpoint_compute` produces
 > an identical row. Should it short-circuit the way direct-mutation does
 > (HMN-REACT-003)? No test covers "recompute produces identical row →
@@ -86,7 +86,7 @@ Feeders are joined when `HamonShutdown` is dropped.
 If a feeder closure panics, the worker catches the panic, logs it via
 `tracing::error!`, and calls `std::process::abort()`.
 
-> OPEN(HMN-REACT-015): Feeder-panic policy is `abort`, but listener-panic
+> OPEN(HMN-REACT-015, #8): Feeder-panic policy is `abort`, but listener-panic
 > policy (HMN-REACT-008) is `catch and continue`, and recompute-worker
 > panic policy is also `abort`. The three paths are inconsistent — is this
 > intentional? Code: `hamondb/src/builder.rs:367`,
@@ -97,7 +97,7 @@ Dropping `HamonShutdown` triggers the shared `ShutdownToken` and joins the
 feeder threads. The recompute queue workers are not explicitly joined;
 they exit when the final `Arc<RecomputeQueue>` is dropped.
 
-> OPEN(HMN-REACT-016): If `HamonShutdown` is dropped while cross-row
+> OPEN(HMN-REACT-016, #3): If `HamonShutdown` is dropped while cross-row
 > recomputes are still queued, some may not run before worker threads
 > exit. No API currently provides "drain pending recomputes". Is this
 > acceptable or a gap?

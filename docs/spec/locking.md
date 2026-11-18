@@ -67,7 +67,7 @@ holds a write lock on `Row<A>` and reads `Row<B>` via `ctx.lookup` can, in
 principle, deadlock with another thread that writes `Row<B>` and reads
 `Row<A>`.
 
-> OPEN(HMN-LOCK-011): A cross-table write / lookup cycle between two
+> OPEN(HMN-LOCK-011, #2): A cross-table write / lookup cycle between two
 > distinct tables is not exercised by any current test. Is this a gap
 > (potential deadlock that users must avoid) or not applicable because
 > computes are read-only on other rows and the recursive-read fix

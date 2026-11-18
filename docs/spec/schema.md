@@ -29,7 +29,7 @@ A column's `id` is its declaration-order index among all fields (including
 `#[skip]` ones). Reordering or inserting fields changes other columns' ids.
 Call sites that persist column ids externally are therefore brittle.
 
-> OPEN(HMN-SCHEMA-005): Column `id` is effectively a positional handle.
+> OPEN(HMN-SCHEMA-005, #4): Column `id` is effectively a positional handle.
 > Is this intended as part of the public contract, or an implementation
 > detail that could switch to a different id scheme (e.g. stable hash of
 > field name)? Code: `hamondb-macro/src/table.rs:97-98`.
@@ -101,7 +101,7 @@ A slot's state is stored as a `SlotRow<M, V>` with primary key `()`. All
 read / write operations on slots go through the same code paths as regular
 table operations.
 
-> OPEN(HMN-SCHEMA-018): Because `set_slot` is implemented as `update`, it
+> OPEN(HMN-SCHEMA-018, #5): Because `set_slot` is implemented as `update`, it
 > is observable that slot writes exercise the full fixpoint and listener
 > machinery (a listener registered on `SlotRow<M, V>` would fire — though
 > there is no supported public way to register one). Is this layering
