@@ -1,0 +1,54 @@
+name: Bug report
+description: Report observed behaviour that contradicts the spec or documentation.
+title: "<short description>"
+labels:
+  - "kind: bug"
+  - "status: triage"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please describe the behaviour you observed, what you expected, and the
+        smallest reproduction you have. If the behaviour contradicts a spec
+        requirement (HMN-…), link it.
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: What happened
+      description: Observed behaviour, error output, logs. Trim to the essentials.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: What you thought should happen, and why (spec reference if any).
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: |
+        Smallest code snippet or test that triggers the bug. If the bug is
+        timing-dependent, say so.
+      render: rust
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Crate version or commit SHA you tested against.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment (optional)
+      description: OS, Rust version, anything unusual about the build.

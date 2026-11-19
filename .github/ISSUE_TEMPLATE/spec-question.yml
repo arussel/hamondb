@@ -1,0 +1,62 @@
+name: Spec question
+description: An open behavioural question whose intent is not settled in docs/spec/.
+title: "HMN-<AREA>-<NNN>: <short question>"
+labels:
+  - "kind: spec-question"
+  - "status: triage"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for questions about the **intended** behaviour of
+        Hamon — cases the code exhibits but whose contract is unclear. Each
+        open question carries an inline marker `OPEN(HMN-…, #N)` in
+        `docs/spec/`; this issue is the `#N`.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: OPEN spec question
+      description: |
+        State the question. One paragraph. End with the three reference lines:
+
+        - **Code:** path(s) + line ranges where the behaviour lives
+        - **Spec:** `docs/spec/<area>.md` and the HMN id
+        - **Test coverage:** what exists today, or "none"
+      value: |
+        <problem statement>
+
+        **Code:** `hamondb/src/…`
+        **Spec:** `docs/spec/<area>.md` (HMN-<AREA>-<NNN>)
+        **Test coverage:** none
+    validations:
+      required: true
+
+  - type: textarea
+    id: options
+    attributes:
+      label: Resolution options
+      description: |
+        Each option names a concrete direction and its trade-off. End with a
+        `Preference:` line — "none yet" is a valid answer.
+      value: |
+        - **Option A — …**
+        - **Option B — …**
+
+        Preference: none yet
+    validations:
+      required: true
+
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: |
+        The checklist that lets the issue close. Keep the marker-removal and
+        `Fixes #N` lines; add/remove the rest as needed.
+      value: |
+        - `OPEN(HMN-<AREA>-<NNN>, #N)` marker removed from `docs/spec/<area>.md`
+        - A test pins the chosen behaviour (or a doc paragraph, if documentation-only)
+        - Closed by the PR via `Fixes #N`
+    validations:
+      required: true
