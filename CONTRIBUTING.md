@@ -60,7 +60,7 @@ Closed issues use GitHub's built-in close reasons — no `status:` label:
 ```mermaid
 stateDiagram-v2
     [*] --> triage
-    triage --> assessed: Claude / maintainer posts assessment
+    triage --> assessed: agent / maintainer posts assessment
     triage --> ready: maintainer decides (may skip)
     triage --> closed_not_planned: maintainer closes
     assessed --> assessed: maintainer re-asks + /assess
@@ -75,14 +75,14 @@ stateDiagram-v2
 
 ### Transition rules
 
-- `triage → assessed` — Claude or the maintainer, after posting the
+- `triage → assessed` — an agent or the maintainer, after posting the
   assessment comment.
 - `assessed → ready` or close as **not planned** — maintainer only, with a
   decision comment: `Decision: <A|B|…>, because …`.
 - `triage → anything` — maintainer may skip the assessment step.
 - `assessed → assessed` — maintainer posts a question and `/assess` to
   re-run.
-- `ready ↔ in-progress` — anyone, including Claude: flip to `in-progress`
+- `ready ↔ in-progress` — anyone, including agents: flip to `in-progress`
   when starting work, back to `ready` if you stop.
 - `in-progress → closed completed` — on merge of a PR containing `Fixes #N`.
 
@@ -91,9 +91,10 @@ Milestones answer "when". Status is never "when".
 ### Triggering an assessment
 
 Assessment is a comment that lays out the problem, the options, and
-(when the author has an opinion) a preference. It is written by Claude.
-Automation isn't live yet; for now the maintainer runs Claude locally when
-a trigger fires.
+(when the author has an opinion) a preference. It is written by an AI
+agent following [AGENTS.md](./AGENTS.md); in practice, Claude Code.
+Automation isn't live yet; for now the maintainer runs the agent locally
+when a trigger fires.
 
 Triggers:
 
@@ -112,6 +113,9 @@ effect on the assessment's structure or content.
 
 - One issue per PR.
 - The PR description contains `Fixes #N` for the issue it closes.
+- Work that needs several PRs is a parent issue with one GitHub sub-issue per
+  PR. Each PR fixes its sub-issue (`Fixes #<sub-issue>`), never the parent; the
+  parent closes when its last sub-issue is done.
 - If the PR resolves a spec question, remove the `OPEN(HMN-…, #N)` marker
   in the same PR.
 - CI runs `cargo test --workspace` on every PR (not yet wired up, coming
