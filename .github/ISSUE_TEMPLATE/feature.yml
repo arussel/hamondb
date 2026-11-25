@@ -1,0 +1,43 @@
+name: Feature request
+description: Propose a new capability or API change.
+title: "<short description>"
+labels:
+  - "kind: feature"
+  - "status: triage"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Features that touch observable behaviour will land with an updated
+        `docs/spec/` paragraph (one or more `HMN-…` ids). Think about what
+        rules the change adds, removes, or weakens before filing.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What can you not do today? What forced you to work around Hamon?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: |
+        Rough API sketch, behaviour change, or new invariant. Precision here
+        shortens the assessment.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you've tried or approaches you rejected, and why.
+
+  - type: textarea
+    id: spec-impact
+    attributes:
+      label: Spec impact (if known)
+      description: Which `HMN-…` requirements this would add, change, or remove.
