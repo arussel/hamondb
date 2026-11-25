@@ -56,7 +56,8 @@ when an `/assess` comment from the maintainer appears on an issue.
 2. Investigate as far as needed to give a real answer. You may write and run
    repro code locally or on a scratch branch. Never push it to `main` or to
    another issue's branch.
-3. Post the assessment as a comment (see "Assessment format" below).
+3. Post the assessment as a comment, following
+   [`docs/agents/assess-issue.md`](docs/agents/assess-issue.md).
 4. Move `status: triage` → `status: assessed`.
 
 A re-assessment (`/assess` on an issue already in `status: assessed`) answers
@@ -129,6 +130,6 @@ with the task as originally defined.
 
 ## Assessment format
 
-_Not defined yet._ Until it is, follow the shape of issues #1–#9: problem
-statement with Code / Spec / Test coverage references, resolution options,
-a preference line ("none yet" is valid), and "Done when".
+Follow [`docs/agents/assess-issue.md`](docs/agents/assess-issue.md): what to
+read, how far to investigate, the comment's sections, and the variant for
+parent issues.
