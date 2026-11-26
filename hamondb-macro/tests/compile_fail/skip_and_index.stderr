@@ -1,7 +1,5 @@
 error: index cannot be skip
- --> tests/compile_fail/skip_and_index.rs:5:5
+ --> tests/compile_fail/skip_and_index.rs:6:5
   |
-5 | /     #[index]
-6 | |     #[skip]
-7 | |     id: String,
-  | |______________^
+6 |     #[skip]
+  |     ^

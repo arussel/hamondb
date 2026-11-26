@@ -32,12 +32,14 @@ pub(super) fn derive(input: TokenStream) -> TokenStream {
                     format_ident!("{}", field_name_ident.to_shouty_snake_case());
                 let field_type = &field.ty;
                 let mut ignore = false;
+                let mut skip_span = field.span();
                 let mut pk = false;
                 let mut idx = false;
                 let mut computed = false;
                 for attr in &field.attrs {
                     if attr.path().is_ident("skip") {
                         ignore = true;
+                        skip_span = attr.span();
                     }
                     if attr.path().is_ident("primary_key") {
                         pk_type_opt = Some(field.ty.clone());
@@ -109,17 +111,17 @@ pub(super) fn derive(input: TokenStream) -> TokenStream {
                 }
                 if (ignore) {
                     if pk {
-                        return syn::Error::new(field.span(), "primary_key cannot be skip")
+                        return syn::Error::new(skip_span, "primary_key cannot be skip")
                             .to_compile_error()
                             .into();
                     }
                     if idx {
-                        return syn::Error::new(field.span(), "index cannot be skip")
+                        return syn::Error::new(skip_span, "index cannot be skip")
                             .to_compile_error()
                             .into();
                     }
                     if computed {
-                        return syn::Error::new(field.span(), "computed column cannot be skip")
+                        return syn::Error::new(skip_span, "computed column cannot be skip")
                             .to_compile_error()
                             .into();
                     }
