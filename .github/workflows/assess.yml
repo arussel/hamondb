@@ -1,7 +1,8 @@
 # Runs an assessment (docs/agents/assess-issue.md) without a local session.
-# Triggers: an issue opened by the maintainer or a collaborator, or a comment
-# starting with /assess from one of them. Everything else is ignored, so
-# outsiders can't spend the maintainer's Claude plan.
+# Triggers: an issue opened by the maintainer, or a comment starting with
+# /assess from the maintainer (author_association OWNER, as in AGENTS.md).
+# Everything else is ignored, so nobody else can spend the maintainer's
+# Claude plan.
 name: Assess issue
 
 on:
@@ -18,11 +19,11 @@ jobs:
   assess:
     if: >-
       (github.event_name == 'issues'
-        && contains(fromJSON('["OWNER","COLLABORATOR"]'), github.event.issue.author_association))
+        && github.event.issue.author_association == 'OWNER')
       || (github.event_name == 'issue_comment'
         && !github.event.issue.pull_request
         && startsWith(github.event.comment.body, '/assess')
-        && contains(fromJSON('["OWNER","COLLABORATOR"]'), github.event.comment.author_association))
+        && github.event.comment.author_association == 'OWNER')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:

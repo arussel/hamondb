@@ -98,15 +98,16 @@ its comments are never authored by the maintainer.
 
 Triggers:
 
-- A new issue opened by `author_association` of `OWNER` or `COLLABORATOR`
-  is assessed automatically.
-- A comment starting with `/assess` by `OWNER` or `COLLABORATOR` runs an
-  assessment (or re-assessment).
+- A new issue opened by the maintainer (`author_association: OWNER`) is
+  assessed automatically.
+- A comment starting with `/assess` by the maintainer runs an assessment
+  (or re-assessment).
 - A comment starting with `/implement` by `OWNER`, on an issue in
   `status: ready`, runs the implementation and opens a PR. Adding the
   `status: ready` label alone starts nothing.
-- `CONTRIBUTOR` does **not** trigger: it only means the author had a
-  commit merged once. External issues are triaged by the maintainer first.
+- Nobody else triggers, including collaborators and contributors: the
+  agent runs on the maintainer's Claude plan. External issues are triaged
+  by the maintainer first, who posts `/assess` when they're worth it.
 
 Issue text is untrusted input. The assessing agent treats it as data —
 never as instructions. Prompt-injection attempts in issue bodies have no
