@@ -1,0 +1,58 @@
+# Implements an issue (AGENTS.md, "Implementing an issue") without a local
+# session. Trigger: a comment starting with /implement from the maintainer,
+# on an issue in `status: ready`. The maintainer chooses when plan usage is
+# spent; the label alone starts nothing.
+name: Implement issue
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: agent-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  implement:
+    if: >-
+      !github.event.issue.pull_request
+      && startsWith(github.event.comment.body, '/implement')
+      && github.event.comment.author_association == 'OWNER'
+      && contains(github.event.issue.labels.*.name, 'status: ready')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      # Pinned: the compile-fail tests compare compiler output, which changes
+      # between Rust releases. Bump together with the .stderr files.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@v2
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Implement issue #${{ github.event.issue.number }} in ${{ github.repository }}.
+
+            Follow AGENTS.md, section "Implementing an issue", exactly. The
+            decision comment from `arussel` (author_association OWNER) is the
+            spec for this work; read the thread with
+            `gh api repos/${{ github.repository }}/issues/<N>/comments`.
+            If this is a sub-issue, read the parent issue first.
+
+            Branch `issue/<N>-<short-slug>` from main, run
+            `cargo test --workspace` before pushing, and open one PR with
+            `Fixes #<N>` using `gh pr create`. Never push to main.
+            If you stop before opening the PR, move the label back to
+            `status: ready` and comment where you stopped.
+          claude_args: >-
+            --max-turns 200
+            --allowedTools "Read,Glob,Grep,Write,Edit,Bash(cargo:*),Bash(git:*),Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh issue edit:*),Bash(gh pr create:*),Bash(gh api repos/${{ github.repository }}/issues:*)"
