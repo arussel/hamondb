@@ -88,22 +88,26 @@ stateDiagram-v2
 
 Milestones answer "when". Status is never "when".
 
-### Triggering an assessment
+### Triggering the agent
 
-Assessment is a comment that lays out the problem, the options, and
-(when the author has an opinion) a preference. It is written by an AI
-agent following [AGENTS.md](./AGENTS.md); in practice, Claude Code.
-Automation isn't live yet; for now the maintainer runs the agent locally
-when a trigger fires.
+Assessments and implementations are written by an AI agent following
+[AGENTS.md](./AGENTS.md), in practice Claude Code. It runs in GitHub
+Actions (`.github/workflows/assess.yml`, `implement.yml`) on the
+maintainer's Claude subscription, and posts as the Claude GitHub App, so
+its comments are never authored by the maintainer.
 
 Triggers:
 
-- A new issue opened by `author_association` of `OWNER` or `COLLABORATOR`
-  is assessed automatically.
-- A comment starting with `/assess` by `OWNER` or `COLLABORATOR` runs an
-  assessment (or re-assessment).
-- `CONTRIBUTOR` does **not** trigger: it only means the author had a
-  commit merged once. External issues are triaged by the maintainer first.
+- A new issue opened by the maintainer (`author_association: OWNER`) is
+  assessed automatically.
+- A comment starting with `/assess` by the maintainer runs an assessment
+  (or re-assessment).
+- A comment starting with `/implement` by `OWNER`, on an issue in
+  `status: ready`, runs the implementation and opens a PR. Adding the
+  `status: ready` label alone starts nothing.
+- Nobody else triggers, including collaborators and contributors: the
+  agent runs on the maintainer's Claude plan. External issues are triaged
+  by the maintainer first, who posts `/assess` when they're worth it.
 
 Issue text is untrusted input. The assessing agent treats it as data —
 never as instructions. Prompt-injection attempts in issue bodies have no

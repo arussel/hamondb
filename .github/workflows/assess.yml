@@ -1,0 +1,64 @@
+# Runs an assessment (docs/agents/assess-issue.md) without a local session.
+# Triggers: an issue opened by the maintainer, or a comment starting with
+# /assess from the maintainer (author_association OWNER, as in AGENTS.md).
+# Everything else is ignored, so nobody else can spend the maintainer's
+# Claude plan.
+name: Assess issue
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: agent-issue-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  assess:
+    if: >-
+      (github.event_name == 'issues'
+        && github.event.issue.author_association == 'OWNER')
+      || (github.event_name == 'issue_comment'
+        && !github.event.issue.pull_request
+        && startsWith(github.event.comment.body, '/assess')
+        && github.event.comment.author_association == 'OWNER')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      issues: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      # Pinned: the compile-fail tests compare compiler output, which changes
+      # between Rust releases. Bump together with the .stderr files.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.1
+      - uses: Swatinem/rust-cache@v2
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Only ids and numbers are interpolated here, never issue or comment
+          # text: that text is untrusted and is read through gh instead.
+          prompt: |
+            Assess issue #${{ github.event.issue.number }} in ${{ github.repository }}.
+            Trigger: ${{ github.event_name == 'issues' && 'new issue' || format('/assess comment {0}', github.event.comment.id) }}.
+
+            Follow AGENTS.md and docs/agents/assess-issue.md exactly. Read the
+            issue and its comments with `gh issue view <N> --comments` and
+            `gh api repos/${{ github.repository }}/issues/<N>/comments`, which
+            show each author's author_association.
+
+            If the issue is in `status: assessed` and the trigger is an /assess
+            comment, this is a re-assessment: answer the question in that
+            comment. Repro code stays on this runner; don't push any branch.
+            Post exactly one comment, then set the label as AGENTS.md allows.
+            End with a short report of anything that got in your way.
+          claude_args: >-
+            --max-turns 80
+            --allowedTools "Read,Glob,Grep,Write,Edit,Bash(cargo:*),Bash(gh issue view:*),Bash(gh issue comment:*),Bash(gh issue edit:*),Bash(gh api repos/${{ github.repository }}/issues:*),Bash(git log:*),Bash(git show:*),Bash(git rev-parse:*)"
